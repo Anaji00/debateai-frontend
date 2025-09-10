@@ -1,118 +1,211 @@
 // src/components/Sidebar.tsx
 
 // Import the `useState` hook from React to manage component-level state.
-import { useState } from "react";
+import { useState, useMemo } from "react";
 // Import a custom hook that manages the logic for fetching and updating chat sessions.
 import useSessions from "../hooks/useSessions";
 
-// This is a React Functional Component named `Sidebar`.
-// It accepts `props` (properties) as an argument. Here, we destructure the props
-// to directly get `userId` and `onOpen`.
-// The TypeScript `{ userId: string; onOpen: (id: string) => void }` defines the expected shape of the props.
-export default function Sidebar({ userId, onOpen }: { userId: string; onOpen: (id: string) => void }) {
-  // We use our custom hook to get the list of sessions and functions to interact with them.
+
+type Accent = "amber" | "sky";
+
+interface SidebarProps {
+  userId: string,
+  onOpen: (id:string) => void;
+  onNew?: () => void;
+  accent?: Accent;
+}
+
+// Maps accent names to specific Tailwind CSS classes for styling.
+const ACCENT: Record<Accent, {ring: string; textDim: string; hoverBtn: string; focusRing: string}> = {
+  amber: {
+    ring: "ring-amber-400",
+    textDim: "text-amber-200",
+    hoverBtn: "hover:bg-amber-600/20",
+    focusRing: "focus:ring-amber-400",  
+  },
+  sky: {
+    ring: "ring-sky-400",
+    textDim: "text-sky-200",
+    hoverBtn: "hover:bg-sky-600/20",
+    focusRing: "focus:ring-sky-400",
+  },
+};
+
+// The Sidebar component displays a list of debate sessions.
+export default function Sidebar({ userId, onOpen, onNew, accent = "amber"}: SidebarProps) {
+  // `useSessions` is a custom hook that fetches and manages session data.
   const { sessions, activeId, select, rename, remove } = useSessions(userId);
 
-  // `useState` is a hook to add state to a component.
-  // `editing` will store the ID of the session being edited, or `null` if none are.
+  // `editing` state holds the ID of the session currently being renamed.
   const [editing, setEditing] = useState<string | null>(null);
-  // `titleDraft` will store the text inside the input field while editing a session title.
+  // `titleDraft` state holds the new title text while editing.
   const [titleDraft, setTitleDraft] = useState("");
 
-  // This function is called when the user clicks the "Rename" button.
+  // `useMemo` optimizes performance by only recalculating the accent styles when `accent` prop changes.
+  const A = useMemo(() => ACCENT[accent], [accent]);
+
+  // Puts a session into "edit mode".
   function beginEdit(id: string, current: string) {
-    // It sets the `editing` state to the ID of the item, triggering a re-render.
     setEditing(id);
-    // It pre-fills the input field with the current title.
     setTitleDraft(current);
   }
 
-  // This function is called when the user finishes editing (e.g., by pressing Enter or clicking away).
+  // Saves the new title for a session.
   function commitEdit(id: string) {
-    // It calls the `rename` function from our `useSessions` hook to save the change.
     rename(id, titleDraft.trim() || "Untitled");
-    // It resets the `editing` state to `null`, which will hide the input field.
     setEditing(null);
   }
 
-  // The JSX returned by the component, which describes the UI structure.
-  return (
-    // `<aside>` is a semantic HTML tag, perfect for a sidebar.
-    // `className` is how you apply CSS classes in JSX. These are Tailwind CSS utility classes.
-    <aside className="text-sm space-y-2">
-      {/* This `div` acts as a simple, non-interactive label for the section. */}
-      <div className="opacity-60 px-2">Sessions</div>
+  // Exits "edit mode" without saving changes.
+  function cancelEdit() {
+    setEditing(null);
+  }
 
-      {/* This `div` is a container for the list of session items. `space-y-1` adds space between them. */}
-      <div className="space-y-1">
-        {/* 
-          This is the standard way to render a list in React.
-          We use the `.map()` array method to transform each `session` object into a JSX element.
-        */}
+  return (
+    // The `<aside>` tag is used for content that is tangentially related to the main content, like a sidebar.
+    <aside className="text-w-64 bg-neutral-900 border-r border-neutral-800 p-4 flex flex-col space-y-2">
+      {/* Header with title and "New Session" button */}
+      <div className="mb-4 flex items-center justify-between">
+        <span className="text-sm font-semibold text-neutral-300 uppercase tracking-wide">
+          Debate Sessions
+        </span>
+
+        <button
+          // The `className` array is joined into a single string of CSS classes.
+          type="button"
+          className= {[
+            "p-1 rounded text-neutral-200 bg-neutral-800",
+            "hover:bg-neutral-700 transition-colors",
+            A.focusRing,
+            "focus:outline-none focus:ring-2 ring-offset-0",
+          ].join(" ")}
+          onClick={() => onNew?.()}
+          title="New Debate Session"
+          aria-label="New Debate Session"
+          >
+            ➕
+          </button>
+      </div>
+
+      {/* This div contains the scrollable list of all debate sessions. */}
+      <div className="space-y-1 overflow-y-auto flex-1 pr-1">
+        {/* We loop through the `sessions` array to render each session item. */}
         {sessions.map((s) => {
-          // Check if the current session in the loop is the active one.
+          // Check if the current session is the one that's active.
           const active = activeId === s.id;
+
           return (
-            // This is the main container `div` for a single session item in the list.
-            // The `key` prop is essential for React to efficiently update the list. It must be a unique string or number.
             <div
-              key={s.id}
-              // The `className` is dynamic. It changes based on whether the item is `active`.
-              // `group` is a special Tailwind class that lets child elements react to the parent's hover state.
-              className={`group rounded-lg px-2 py-2 cursor-pointer transition
-                ${active ? "bg-neutral-800/80" : "hover:bg-neutral-900"}`}
-              // When this `div` is clicked, we select the session and notify the parent component.
-              onClick={() => { select(s.id); onOpen(s.id); }}
-            >
-              {/* 
-                This is conditional rendering.
-                If `editing` state matches this session's ID, we render an `<input>` field.
-                Otherwise, we render the normal display view.
-              */}
-              {editing === s.id ? (
-                // The input field for renaming a session.
-                <input
-                  autoFocus // Automatically focuses the input when it appears.
-                  value={titleDraft} // The input's value is controlled by our `titleDraft` state.
-                  onChange={(e) => setTitleDraft(e.target.value)} // Updates the state on every keystroke.
-                  onBlur={() => commitEdit(s.id)} // `onBlur` fires when the input loses focus (user clicks away).
-                  onKeyDown={(e) => (e.key === "Enter" ? commitEdit(s.id) : null)} // Commits the edit if Enter is pressed.
-                  className="w-full bg-transparent outline-none border-b border-neutral-700"
-                />
-              ) : (
-                // This is the normal view when not editing.
-                // This `div` uses flexbox to arrange the title and buttons side-by-side.
-                <div className="flex items-center justify-between gap-2">
-                  {/* This `div` holds the session title. `truncate` prevents long titles from breaking the layout. */}
-                  <div className="truncate">{s.title}</div>
-                  {/* This `div` contains the action buttons. It's invisible by default (`opacity-0`)
-                      but becomes visible when the parent `div` (with the `group` class) is hovered. */}
-                  <div className="opacity-0 group-hover:opacity-100 transition flex gap-1">
-                    {/* The "Rename" button. */}
-                    <button
-                      className="text-xs px-2 py-1 rounded border border-neutral-700"
-                      // `e.stopPropagation()` is crucial here. It prevents the `onClick` of the parent `div`
-                      // from firing. Without it, clicking "Rename" would also trigger `select(s.id)`.
-                      onClick={(e) => { e.stopPropagation(); beginEdit(s.id, s.title); }}
+              key = {s.id}
+              className= {[
+                "group relative p-2 rounded-lg flex items-center justify-betweeen",
+                "transition-color cursor-pointer border border-transparent",
+                active
+                  ? `bg-neutral-900 ring-2 ${A.ring}`
+                  : "bg-neutral-900 hover:bg-neutral-800",
+              ].join(" ")}
+              // When a session is clicked, it becomes the active one.
+              onClick={() => {
+                select(s.id);
+                onOpen(s.id);
+              }}
+              role="button"
+              aria-pressed={active}
+              tabIndex={0}
+              // Allows selection with Enter or Spacebar for accessibility.
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  select(s.id);
+                  onOpen(s.id);
+                }
+              }}
+              title= {s.title || "Untitled Debate Session"}
+              >
+                {/* Main content of the session item */}
+                <div className="flex-1 min-w-0">
+                  {editing === s.id ? (
+                    // If in edit mode, show an input field to rename the session.
+                    <input
+                      autoFocus
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onBlur={() => commitEdit(s.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitEdit(s.id);
+                        else if (e.key === "Escape") cancelEdit();
+                      }}
+                      className= {[
+                        "w-full bg-transparent outline-none",
+                        "border-b border-neutral-700 focus:border-neutral-400",
+                        "text-sm"
+                      ].join(" ")}
+                      aria-label="Rename Debate Session"
+                      />
+                  ) : (
+                    // Otherwise, just display the session title.
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 truncate text-sm text-neutral-200">
+                      {s.title || "Untitled Debate Session"}
+                  </div> 
+                </div>
+                )}
+
+                {/* Display the last updated timestamp for the session. */}
+                <div className="text-[11px] opacity-60 mt-1">
+                  {new Date(s.updatedAt).toLocaleString()}
+                </div>
+              </div>
+
+              {/* Show rename and delete buttons only on hover and if not currently editing. */}
+              {editing !== s.id && (
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                  <button
+                    type="button"
+                    // `e.stopPropagation()` prevents the click from bubbling up to the parent div's `onClick`.
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      beginEdit(s.id, s.title);
+                    }}
+                    className={[
+                      "px-2 py-1 rounded text-xs text-neutral-200",
+                      "hover:bg-neutral-700 transition-colors",
+                      A.focusRing,
+                      "focus:outline-none focus:ring-2 ring-offset-0",
+                      A.hoverBtn,
+                    ].join(" ")}
+                    title="Rename"
+                    aria-label= {`Rename ${s.title} || "session"}`}
                     >
-                      Rename
+                      ✏️
                     </button>
-                    {/* The "Delete" button. */}
                     <button
-                      className="text-xs px-2 py-1 rounded border border-red-700 text-red-300"
-                      // It also uses `stopPropagation` for the same reason.
-                      onClick={(e) => { e.stopPropagation(); remove(s.id); }}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                      type="button"
+                      // This button calls the `remove` function from the `useSessions` hook.
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(s.id);
+                      }}
+                      className={[
+                        "px-2 py-1 rounded text-xs text-red-300",
+                        "hover:bg-red-700/30 transition-colors",
+                        "focus:outline-none focus:ring-2 focus:ring-red-500",
+                      ].join (" ")}
+                      title= "Delete"
+                      aria-label = {`Delete ${s.title} || "session}`}
+                      >
+                        🗑️
+                      </button>
                 </div>
               )}
-              {/* This `div` simply displays the last updated timestamp for the session. */}
-              <div className="text-[11px] opacity-50 mt-1">{new Date(s.updatedAt).toLocaleString()}</div>
-            </div>
+              </div>
           );
         })}
+
+        {/* If there are no sessions, display a helpful message. */}
+        {sessions.length === 0 && (
+          <div className="text-neutral-500 text-sm italic">No sessions yet</div>
+          )}
       </div>
     </aside>
   );

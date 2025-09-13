@@ -4,8 +4,8 @@ import { useAuth } from "../auth/authProvider";
 /**
  * TopNav
  * ------
- * A glassy, gradient header with sign-in/out controls. Uses amber/sky
- * accents exclusively (no indigo) and focuses states for accessibility.
+ * Glassy dark header with amber/sky accents.
+ * Brand logo should ALWAYS navigate to "/".
  */
 export default function TopNav() {
   const { user, isAuthenticated, logout } = useAuth();
@@ -13,13 +13,13 @@ export default function TopNav() {
   const isAuthRoute = pathname === "/login" || pathname === "/register";
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-neutral-800 bg-neutral-950/70 backdrop-blur text-white shadow-[0_5px_15px_rgba(0,0,0,0.2)]">
+    <header className="sticky top-0 z-50 w-full border-b border-neutral-800 bg-neutral-950/70 backdrop-blur text-white shadow-[0_5px_15px_rgba(0,0,0,0.2)]">
       <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
-        {/* Brand */}
+        {/* Brand → always go home */}
         <Link
-          to={isAuthenticated ? "/debate" : "/"}
+          to="/"
           className="font-semibold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-sky-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40 rounded"
-          aria-label="Go to start"
+          aria-label="Go to home"
         >
           DebateAI
         </Link>
@@ -30,6 +30,7 @@ export default function TopNav() {
               Signed in as <b className="text-neutral-100">{user?.identifier}</b>
             </span>
           )}
+
           {isAuthenticated ? (
             <button
               onClick={logout}

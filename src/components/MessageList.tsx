@@ -4,14 +4,19 @@
 // - Renders streamed text directly (no simulated typewriter while streaming)
 // - Character-aware TypingIndicator while a turn is in-flight
 // - Blinking caret at the end of the currently streaming assistant bubble
-// - Preserves JudgeBlock (JSON pretty view), sources, and audio button
+// - Preserves JudgeBlock (JSON pretty view) and the per-turn TTS button
+// - NOTE: Session-level RAG upload only — per-turn source toggles removed
 
-import { useState, memo } from "react";
+import { memo, useMemo } from "react";
+import JudgeBlock from "./JudgeBlock";
 import TypingIndicator from "./TypingIndicator";
 import BlinkingCaret from "./BlinkingCaret";
-import type { Message, DebateModeKey } from "../lib/chat";
+import type { Message } from "../lib/chat";
+import type { DebateModeKey } from "../types/DebateMode";
 import { DEFAULT_CHAR } from "../data/CharData";
-const genericAvatar = "https://source.unsplash.com/featured/80x80/?silhouette,portrait";
+
+const genericAvatar =
+  "https://source.unsplash.com/featured/80x80/?silhouette,portrait";
 
 function findAvatar(name?: string) {
   if (!name) return genericAvatar;
@@ -38,54 +43,42 @@ export default memo(function MessageList({
   mode,
   onGenerateAudio,
 }: MessageListProps) {
-  const label = mode === "Devil's Advocate" ? "Devil's Advocate" : (typingSpeaker || undefined);
-  const avatar = findAvatar(typingSpeaker || undefined);
+  // If mode is DA, we force the visible label to "Devil's Advocate"
+  const typingLabel = useMemo(
+    () => (mode === "Devil's Advocate" ? "Devil's Advocate" : typingSpeaker || undefined),
+    [mode, typingSpeaker]
+  );
+
+  const typingAvatar = useMemo(
+    () => findAvatar(typingSpeaker || undefined),
+    [typingSpeaker]
+  );
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-2 overflow-y-auto">
+    <div className="flex flex-col gap-4 px-4 py-2 overflow-y-auto" aria-live="polite">
       {messages.map((msg, i) => (
         <MessageItem
           key={msg.turnId ?? i}
           msg={msg}
-          isStreaming={typeof msg.turnId === "number" && msg.turnId === streamingTurnId}
+          isStreaming={
+            typeof msg.turnId === "number" && msg.turnId === streamingTurnId
+          }
           onGenerateAudio={onGenerateAudio}
         />
       ))}
 
       {/* Character-aware typing status while backend is producing a turn */}
-      {loading && label && (
+      {loading && typingLabel && (
         <TypingIndicator
           name={typingSpeaker || undefined}
           labelOverride={mode === "Devil's Advocate" ? "Devil's Advocate" : undefined}
-          avatarUrl={avatar}
+          avatarUrl={typingAvatar}
           accent="amber"
         />
       )}
     </div>
   );
 });
-
-function JudgeBlock({ raw }: { raw: string }) {
-  const m = raw.match(/^([^:]+):\s*\r?\n([\s\S]*)$/);
-  const label = m ? m[1] : "Judge";
-  const jsonText = m ? m[2] : raw;
-
-  let parsed: unknown = null;
-  try { parsed = JSON.parse(jsonText); } catch {}
-
-  return (
-    <div className="space-y-2">
-      <div className="font-medium">{label}</div>
-      {parsed ? (
-        <pre className="text-xs overflow-auto max-h-64 border border-neutral-800 rounded p-2 bg-neutral-900/50">
-          {JSON.stringify(parsed, null, 2)}
-        </pre>
-      ) : (
-        <div className="whitespace-pre-wrap leading-relaxed">{raw}</div>
-      )}
-    </div>
-  );
-}
 
 function MessageItem({
   msg,
@@ -96,15 +89,17 @@ function MessageItem({
   isStreaming: boolean;
   onGenerateAudio?: (turnId: number) => void;
 }) {
-  const [showSources, setShowSources] = useState(false);
   const isUser = msg.role === "user";
 
-  // No indigo; user bubble uses amber accent for visibility on dark bg
+  // User bubble uses amber accent for visibility on dark bg; AI stays neutral.
   const bubble = isUser
     ? "bg-amber-500/90 border-amber-400 text-black"
     : "bg-neutral-800 border-neutral-700 text-neutral-100";
 
   const avatarUrl = isUser ? genericAvatar : findAvatar(msg.speaker);
+
+  const isJudgeJson =
+    msg.speaker === "Judge" && /^(Summary|Grade)\s*:?/i.test(msg.text);
 
   return (
     <div className="flex items-start gap-3">
@@ -127,7 +122,7 @@ function MessageItem({
             bubble,
           ].join(" ")}
         >
-          {msg.speaker === "Judge" && /^(Summary|Grade):/.test(msg.text) ? (
+          {isJudgeJson ? (
             <JudgeBlock raw={msg.text} />
           ) : (
             <>
@@ -138,35 +133,12 @@ function MessageItem({
           )}
         </div>
 
-        {!!msg.sources?.length && (
-          <div className="mt-2">
-            <button
-              onClick={() => setShowSources((s) => !s)}
-              className="text-xs underline opacity-80 hover:opacity-100"
-            >
-              {showSources ? "Hide excerpts" : "Show excerpts"}
-            </button>
-            {showSources && (
-              <ul className="mt-2 space-y-2 text-xs opacity-90">
-                {msg.sources.map((s, j) => (
-                  <li key={j} className="border border-neutral-800 rounded p-2 bg-neutral-900/40">
-                    <div className="font-medium">{s.title}</div>
-                    {typeof s.chunk_index === "number" && (
-                      <div className="opacity-70">chunk {s.chunk_index}</div>
-                    )}
-                    <div className="mt-1 whitespace-pre-wrap">{s.snippet}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
+        {/* Per-turn TTS */}
         {onGenerateAudio && typeof msg.turnId === "number" && (
           <div className="mt-2">
             {!msg.audio ? (
               <button
-                className="text-xs bg-white text-black rounded px-2 py-1 hover:opacity-90"
+                className="text-xs bg-white text-black rounded px-2 py-1 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-sky-400/40"
                 onClick={() => onGenerateAudio(msg.turnId as number)}
                 title="Generate Audio"
                 aria-label="Generate Audio"

@@ -3,6 +3,7 @@ import type { DebateModeKey } from "../types/DebateMode";
 import CharacterSelector from "./CharacterSelector";
 import type { CharData } from "../data/CharData";
 import { DEFAULT_CHAR } from "../data/CharData";
+import { useEffect } from "react";
 
 // This component orchestrates the entire pre-debate setup UI.
 export default function CharacterSetup(props: {
@@ -36,9 +37,9 @@ export default function CharacterSetup(props: {
 
   // This is a state cleanup effect. If the user switches from a two-player mode to a one-player mode,
   // we must clear the second character to avoid inconsistent or "stale" state.
-  if (!needsTwo && character_2) {
-    setCharacter_2("");
-  }
+  useEffect(() => {
+    if (!needsTwo && character_2) setCharacter_2("");
+  }, [needsTwo, character_2, setCharacter_2]);
 
   // --- Form Validation ---
   // These constants check if the form is in a valid state to start the debate.

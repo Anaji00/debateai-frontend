@@ -13,7 +13,7 @@ import {
   type ChatHistory,
 } from "../api/debateClient";
 
-import { sanitizeUserSeed, unwrapJson } from "../lib/text";
+import { sanitizeUserSeed} from "../lib/text";
 import { resolveAudioPath } from "../lib/audio";
 import {
   appendDeltaByTurnId,
@@ -42,8 +42,8 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
 
-  const [c1, setC1] = useState("Donald Trump");
-  const [c2, setC2] = useState("Karl Marx");
+  const [c1, setC1] = useState("");
+  const [c2, setC2] = useState("");
 
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -150,17 +150,9 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   }
 
   function appendDelta(turnId: number, raw: string) {
-    const { text, audio } = unwrapJson(raw);
-
-    if (text) {
-      const prev = deltaBufferRef.current.get(turnId) || "";
-      deltaBufferRef.current.set(turnId, prev + text);
-      scheduleFlush();
-    }
-
-    if (audio) {
-      setMessages((prev) => updateAudioByTurnId(prev, turnId, audio));
-    }
+    const prev = deltaBufferRef.current.get(turnId) || "";
+    deltaBufferRef.current.set(turnId, prev + raw);
+    scheduleFlush();
   }
 
   function maybeAttachAnnotatedAudio(rawSpeaker: string, filename?: string | null) {
@@ -446,6 +438,13 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     turnStartAtRef.current.clear();
   }
 
+  function hardReset() {
+    reset();
+    setC1("");
+    setC2("");
+  }
+
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -476,6 +475,8 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     grade,
     speak,
     reset,
+    hardReset,
+
     adoptSession,
     onKeyDown,
 

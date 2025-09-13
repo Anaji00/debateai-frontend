@@ -1,5 +1,5 @@
 // src/pages/DebatePage.tsx
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import useDebate from "../hooks/useDebate";
 import Sidebar from "../components/Sidebar";
 import MessageList from "../components/MessageList";
@@ -41,18 +41,28 @@ export default function DebatePage() {
     streamingTurnId,
     grade,
     speak,
-    onKeyDown,   // typed for HTMLTextAreaElement in your hook
+    onKeyDown,
+    hardReset,  // typed for HTMLTextAreaElement in your hook
     reset,
     scrollRef,
     adoptSession,
   } = useDebate({ mode, userId });
 
   // `useEffect` runs on component mount to load the last used session.
+  const hydratedOnceRef = useRef(false)
   useEffect(() => {
+    if (hydratedOnceRef.current) return;
+    hydratedOnceRef.current = true;
     const last = getLastSessionId(userId);
     // If a previous session ID is found and the debate hasn't started, load it.
     if (!started && last) adoptSession(last);
   }, [userId, started, adoptSession]); // Dependencies ensure this runs only when these values change.
+
+  function handleModeChange(next: DebateModeKey) {
+    if (next === mode) return;
+    hardReset();
+    setMode(next);
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-neutral-950 to-black text-emerald">
@@ -62,16 +72,14 @@ export default function DebatePage() {
         <aside className="hidden md:block">
           {/* The Sidebar is sticky so it stays in place while the user scrolls the main content. */}
           <div className="sticky top-16">
-            <div className="sticky top-16">
               <Sidebar userId={userId} onOpen={(id) => adoptSession(id)} />
-            </div>
           </div>
         </aside>
 
         {/* Main content area for the debate interface. */}
         <main className="bg-neutral-900/50 border border-neutral-800 rounded-2xl overflow-hidden shadow-xl shadow-black/20 backdrop-blur">
           <div className="border-b border-neutral-800">
-            <ModeSelector mode={mode} onChange={setMode} />
+            <ModeSelector mode={mode} onChange={handleModeChange} />
           </div>
           {/* Conditionally render either the setup screen or the chat interface. */}
           {!started ? (

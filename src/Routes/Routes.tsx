@@ -1,13 +1,16 @@
 import { Routes, Route, Navigate } from "react-router-dom";
+import {lazy, Suspense} from 'react';
 
 // Public pages
-import LandingPage from "../pages/LandingPage";
-import LoginPage from "../pages/LoginPage";
-import RegisterPage from "../pages/RegisterPage";
+const LandingPage = lazy(() => import( "../pages/LandingPage"));
+const LoginPage = lazy(() => import("../pages/LoginPage"));
+const RegisterPage = lazy(() => import("../pages/RegisterPage"));
+
+// Protected "../pages/RegisterPage";
 
 // Protected area
 import ProtectedRoute from "../pages/ProtectedRoute"; // <-- guard that returns <Outlet/>
-import DebatePage from "../pages/DebatePage";
+const DebatePage = lazy(() => import("../pages/DebatePage"));
 
 /**
  * AppRoutes
@@ -23,6 +26,13 @@ import DebatePage from "../pages/DebatePage";
  */
 export default function AppRoutes() {
   return (
+    <Suspense
+      fallback= {
+        <div className="min-h-[60vh] grid place-items-center text-neutral-400">
+          Loading.....
+        </div>
+      }
+      >
     <Routes>
       {/* Public */}
       <Route path="/" element={<LandingPage />} />
@@ -38,5 +48,6 @@ export default function AppRoutes() {
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  </Suspense>
   );
 }

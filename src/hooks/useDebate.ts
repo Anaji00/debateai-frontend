@@ -23,8 +23,7 @@ import {
 } from "../lib/messageOps";
 import { SPEAKER_USER, type DebateModeKey, type Message } from "../lib/chat";
 
-// NOTE: your local debounce likely only accepts (fn) — not (fn, wait).
-// I’m calling it with one arg to satisfy TS2554.
+// NOTE: if your local debounce takes (fn, waitMs), you can add the wait back.
 import {
   debounce,
   saveSession,
@@ -33,30 +32,53 @@ import {
   type StoredSession,
 } from "../lib/persist";
 
-import {
-  detectTargetSpeakers,
-  normalizeAddressees,
-} from "../lib/targets";
+import { detectTargetSpeakers, normalizeAddressees } from "../lib/targets";
 
 type UseDebateArgs = { mode: DebateModeKey; userId: string };
 
 export default function useDebate({ mode, userId }: UseDebateArgs) {
+  // ---------------- state ----------------
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+
   const [c1, setC1] = useState("Donald Trump");
   const [c2, setC2] = useState("Karl Marx");
+
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // For UI: character-aware typing indicator and caret target
+  const [typingSpeaker, setTypingSpeaker] = useState<string | null>(null);
+  const [streamingTurnId, setStreamingTurnId] = useState<number | null>(null);
+
+  // ---------------- refs ----------------
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const audioCacheRef = useRef<Map<number, string>>(new Map());
 
-  // --- Persist session changes ------------------------------------------------
-  // Your debounce typing likely only accepts (fn) — not (fn, waitMs)
-  // If your debounce DOES accept a wait, feel free to re-add the 400ms arg.
+  // Buffer deltas & flush at ~60fps
+  const deltaBufferRef = useRef<Map<number, string>>(new Map());
+  const rafRef = useRef<number | null>(null);
+
+  // Track first visible paint per turn, to optionally hide the indicator
+  const firstDeltaSeenRef = useRef<Set<number>>(new Set());
+
+  // Pre-roll dwell timer per turn
+  const turnStartAtRef = useRef<Map<number, number>>(new Map());
+
+  // Avoid stale closures in raf: mirror streamingTurnId into a ref
+  const streamingTurnIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    streamingTurnIdRef.current = streamingTurnId;
+  }, [streamingTurnId]);
+
+  // Tuning knobs
+  const MIN_TYPING_DWELL_MS = 120; // 0 => no dwell; try 80–150ms
+  const HIDE_INDICATOR_ON_FIRST_PAINT = true;
+
+  // ---------------- persist session ----------------
   const debouncedSave = useRef(
     debounce((s: StoredSession) => {
       saveSession(userId, s);
@@ -66,7 +88,6 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   useEffect(() => {
     if (!sessionId) return;
     const firstUser = messages.find((m) => m.role === "user")?.text || "New chat";
-
     const existing = loadSession(userId, sessionId);
     const createdAt = existing?.createdAt || Date.now();
     const s: StoredSession = {
@@ -80,21 +101,66 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     debouncedSave(s);
   }, [messages, sessionId, userId, debouncedSave]);
 
-  // --- Helpers ----------------------------------------------------------------
+  // ---------------- helpers ----------------
   function pushUser(text: string) {
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", speaker: SPEAKER_USER, text },
-    ]);
+    setMessages((prev) => [...prev, { role: "user", speaker: SPEAKER_USER, text }]);
+  }
+
+  function scheduleFlush() {
+    if (rafRef.current != null) return;
+
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+
+      // Guaranteed pre-roll: if the active turn hasn't dwelled long enough
+      const activeId = streamingTurnIdRef.current;
+      if (activeId != null && !firstDeltaSeenRef.current.has(activeId)) {
+        const startedAt = turnStartAtRef.current.get(activeId) || 0;
+        const elapsed = performance.now() - startedAt;
+        if (elapsed < MIN_TYPING_DWELL_MS) {
+          const remain = MIN_TYPING_DWELL_MS - elapsed;
+          setTimeout(() => scheduleFlush(), remain);
+          return;
+        }
+      }
+
+      // Apply all buffered deltas in one state update
+      setMessages((prev) => {
+        let next = prev;
+        let paintedActive = false;
+        const active = streamingTurnIdRef.current;
+
+        deltaBufferRef.current.forEach((buf, tId) => {
+          if (!buf) return;
+          next = appendDeltaByTurnId(next, tId, buf);
+          if (HIDE_INDICATOR_ON_FIRST_PAINT && active != null && tId === active && !firstDeltaSeenRef.current.has(active)) {
+            paintedActive = true;
+          }
+        });
+        deltaBufferRef.current.clear();
+
+        // Mark first paint; optionally hide the typing indicator immediately
+        if (active != null && paintedActive) {
+          firstDeltaSeenRef.current.add(active);
+          if (HIDE_INDICATOR_ON_FIRST_PAINT) setTypingSpeaker(null);
+        }
+        return next;
+      });
+    });
   }
 
   function appendDelta(turnId: number, raw: string) {
     const { text, audio } = unwrapJson(raw);
-    setMessages((prev) => {
-      let next = appendDeltaByTurnId(prev, turnId, text);
-      if (audio) next = updateAudioByTurnId(next, turnId, audio);
-      return next;
-    });
+
+    if (text) {
+      const prev = deltaBufferRef.current.get(turnId) || "";
+      deltaBufferRef.current.set(turnId, prev + text);
+      scheduleFlush();
+    }
+
+    if (audio) {
+      setMessages((prev) => updateAudioByTurnId(prev, turnId, audio));
+    }
   }
 
   function maybeAttachAnnotatedAudio(rawSpeaker: string, filename?: string | null) {
@@ -111,36 +177,26 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     return { chatml };
   }
 
-  // Returns undefined when no targets — safe to pass to API (it’s optional)
-// Returns undefined when no targets — safe to pass to API (it’s optional)
   function buildAddressees(text: string): string[] | undefined {
-  // Compatibility: some versions of detectTargetSpeakers accept (text) only,
-  // others accept (text, candidates). We check the declared arity at runtime
-  // and cast to any so TS is satisfied in both cases.
     const candidates = [c1, c2].filter(Boolean);
 
     let targets: string[];
     const fn: any = detectTargetSpeakers as any;
     if (typeof fn === "function" && fn.length >= 2) {
-      // signature: (text, candidates[])
       targets = fn(text, candidates);
     } else {
-      // signature: (text)
       targets = fn(text);
-      // Optional: if your 1-arg version returns things beyond c1/c2, narrow here:
       if (Array.isArray(targets) && candidates.length) {
         targets = targets.filter((t: string) =>
           candidates.some((c) => c.toLowerCase() === String(t).toLowerCase())
         );
       }
+    }
+    const addrs = normalizeAddressees(targets);
+    return addrs && addrs.length ? addrs : undefined;
   }
 
-  const addrs = normalizeAddressees(targets);
-  return addrs && addrs.length ? addrs : undefined;
-}
-
-
-  // --- Stream event handler ---------------------------------------------------
+  // ---------------- event handler ----------------
   function onEvent(evt: JsonlEvent) {
     switch (evt.type) {
       case "session": {
@@ -148,11 +204,21 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
         setSessionId(id);
         const firstUser = messages.find((m) => m.role === "user")?.text || "New chat";
         const base = newSessionFromSeed(userId, id, firstUser);
-        saveSession(userId,{ ...base, messages });
+        saveSession(userId, { ...base, messages });
         break;
       }
-      case "turn":
+
+      case "turn": {
         setLoading(true);
+        setTypingSpeaker(evt.speaker || "Assistant");
+        setStreamingTurnId(evt.turn_id);
+        streamingTurnIdRef.current = evt.turn_id;
+
+        // start dwell timer for this turn
+        turnStartAtRef.current.set(evt.turn_id, performance.now());
+        firstDeltaSeenRef.current.delete(evt.turn_id);
+
+        // add empty assistant bubble
         setMessages((prev) => [
           ...prev,
           {
@@ -164,46 +230,72 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
           },
         ]);
         break;
+      }
 
-      case "sources":
+      case "sources": {
         setMessages((prev) => setSourcesByTurnId(prev, evt.turn_id, evt.items as any));
         break;
+      }
 
-      case "delta":
+      case "delta": {
         appendDelta(evt.turn_id, evt.delta);
-        {
-          // optional inline audio annotation: [AUDIO::<speaker>::<filename>::]
-          const m = evt.delta.match(/\[AUDIO::([^:]+)::([^:]+)::\]/i);
-          if (m) {
-            const [, rawSpeaker, filename] = m;
-            maybeAttachAnnotatedAudio(rawSpeaker, filename);
-          }
+
+        // optional inline audio annotation: [AUDIO::<speaker>::<filename>::]
+        const m = evt.delta.match(/\[AUDIO::([^:]+)::([^:]+)::\]/i);
+        if (m) {
+          const [, rawSpeaker, filename] = m;
+          maybeAttachAnnotatedAudio(rawSpeaker, filename);
         }
         break;
+      }
 
-      case "endturn":
+      case "endturn": {
         setLoading(false);
-  
+
+        // ensure any remaining buffer paints now
+        if (deltaBufferRef.current.size) {
+          setMessages((prev) => {
+            let next = prev;
+            deltaBufferRef.current.forEach((buf, tId) => {
+              if (buf) next = appendDeltaByTurnId(next, tId, buf);
+            });
+            deltaBufferRef.current.clear();
+            return next;
+          });
+        }
+
+        if (streamingTurnIdRef.current === evt.turn_id) {
+          setTypingSpeaker(null);
+          setStreamingTurnId(null);
+          streamingTurnIdRef.current = null;
+        }
+        turnStartAtRef.current.delete(evt.turn_id);
 
         if (sessionId) {
           const existing = loadSession(userId, sessionId);
           if (existing) {
-            saveSession(userId, {
-              ...existing,
-              updatedAt: Date.now(),
-            });
+            saveSession(userId, { ...existing, updatedAt: Date.now() });
           }
         }
         break;
+      }
 
-      case "error":
+      case "error": {
         console.error("[stream error]", evt.message);
         setLoading(false);
+        setTypingSpeaker(null);
+        if (streamingTurnIdRef.current != null) {
+          turnStartAtRef.current.delete(streamingTurnIdRef.current);
+        }
+        setStreamingTurnId(null);
+        streamingTurnIdRef.current = null;
+        // we do not clear buffers here—let the UI keep whatever text arrived
         break;
+      }
     }
   }
 
-  // --- Session adoption -------------------------------------------------------
+  // ---------------- session adoption ----------------
   async function adoptSession(existingId: string) {
     const stored = loadSession(userId, existingId);
     if (!stored) return;
@@ -213,7 +305,7 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     setLoading(false);
   }
 
-  // --- Actions ----------------------------------------------------------------
+  // ---------------- actions ----------------
   async function start() {
     if (started) return;
     const seed = sanitizeUserSeed(input.trim(), [c1, c2].filter(Boolean));
@@ -232,37 +324,18 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
 
     try {
       if (mode === "Versus") {
-        // Versus START payload — start routes do NOT accept addressed_to or session_id
-        await versusStartStream({
-          topic: seed,
-          c1,
-          c2,
-          history: chatml,
-          onEvent,
-          signal,
-        });
+        await versusStartStream({ topic: seed, c1, c2, history: chatml, onEvent, signal });
       } else if (mode === "Solo") {
-        // Solo START requires character + topic
-        await soloStartStream({
-          character: c1,
-          topic: seed,
-          history: chatml,
-          onEvent,
-          signal,
-        });
+        await soloStartStream({ character: c1, topic: seed, history: chatml, onEvent, signal });
       } else {
-        // Devil’s Advocate START requires character + thesis
-        await daStartStream({
-          character: c1,
-          thesis: seed,
-          history: chatml,
-          onEvent,
-          signal,
-        });
+        await daStartStream({ character: c1, thesis: seed, history: chatml, onEvent, signal });
       }
     } catch (e) {
       console.error("[stream start] failed:", e);
       setLoading(false);
+      setTypingSpeaker(null);
+      setStreamingTurnId(null);
+      streamingTurnIdRef.current = null;
     }
   }
 
@@ -278,32 +351,24 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
 
     try {
       if (mode === "Versus") {
-        // Versus INJECT payload — can pass addressed_to as optional hint
         await versusInjectStream({
           session_id: Number(sessionId),
           user_inject: text,
-          addressed_to: buildAddressees(text), // undefined is fine
+          addressed_to: buildAddressees(text),
           onEvent,
           signal,
         });
       } else if (mode === "Solo") {
-        await soloInjectStream({
-          session_id: Number(sessionId),
-          user_inject: text,
-          onEvent,
-          signal,
-        });
+        await soloInjectStream({ session_id: Number(sessionId), user_inject: text, onEvent, signal });
       } else {
-        await daInjectStream({
-          session_id: Number(sessionId),
-          user_inject: text,
-          onEvent,
-          signal,
-        });
+        await daInjectStream({ session_id: Number(sessionId), user_inject: text, onEvent, signal });
       }
     } catch (e) {
       console.error("[stream inject] failed:", e);
       setLoading(false);
+      setTypingSpeaker(null);
+      setStreamingTurnId(null);
+      streamingTurnIdRef.current = null;
     }
   }
 
@@ -318,11 +383,7 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
       const data = await fetchSummary(Number(sessionId), "concise");
       setMessages((m) => [
         ...m,
-        {
-          role: "system",
-          speaker: "Judge",
-          text: "Summary:\n" + JSON.stringify((data as any).summary, null, 2),
-        },
+        { role: "system", speaker: "Judge", text: "Summary:\n" + JSON.stringify((data as any).summary, null, 2) },
       ]);
     } catch (e) {
       console.error("[summary] failed:", e);
@@ -338,13 +399,7 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
         {
           role: "system",
           speaker: "Judge",
-          text:
-            "Grade:\n" +
-            JSON.stringify(
-              (data as any).grade ?? (data as any).grading,
-              null,
-              2
-            ),
+          text: "Grade:\n" + JSON.stringify((data as any).grade ?? (data as any).grading, null, 2),
         },
       ]);
     } catch (e) {
@@ -382,7 +437,13 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     setInput("");
     setStarted(false);
     setLoading(false);
+    setTypingSpeaker(null);
+    setStreamingTurnId(null);
+    streamingTurnIdRef.current = null;
+    deltaBufferRef.current.clear();
     audioCacheRef.current.clear();
+    firstDeltaSeenRef.current.clear();
+    turnStartAtRef.current.clear();
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -393,6 +454,7 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   }
 
   return {
+    // reactive state for UI
     messages,
     input,
     setInput,
@@ -403,6 +465,12 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     started,
     loading,
     sessionId,
+
+    // NEW: for MessageList typing indicator + caret
+    typingSpeaker,
+    streamingTurnId,
+
+    // actions
     handlePrimary,
     summarize,
     grade,
@@ -410,6 +478,8 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     reset,
     adoptSession,
     onKeyDown,
+
+    // scroll anchor if you auto-scroll elsewhere
     scrollRef,
   };
 }

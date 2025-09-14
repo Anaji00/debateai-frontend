@@ -1,3 +1,132 @@
+====================================================================
+File: src/lib/stream.ts
+====================================================================
+
+// src/lib/stream.ts
+// Strict NDJSON streaming decoder for fetch() Response bodies.
+// - Uses TextDecoder(stream: true) so multibyte UTF-8 codepoints don't split
+// - Carries partial lines between chunks
+// - Emits ONLY complete, parsed JSON lines (no raw fragments)
+// - Preserves spaces INSIDE JSON fields
+// - Safely discards a single trailing '\r' (CR) added by \r\n line endings
+
+export type StreamOptions = { signal?: AbortSignal; debug?: boolean };
+
+/**
+ * Processes a fetch() Response body as a stream of NDJSON (Newline Delimited JSON).
+ * Each valid JSON line is parsed and passed to the `onEvent` callback.
+ *
+ * @param res The `Response` object from a `fetch` call.
+ * @param onEvent The callback function to execute for each parsed JSON object.
+ * @param opts Optional parameters, including an AbortSignal and a debug flag.
+ */
+export async function streamJSON<T = unknown>(
+  res: Response,
+  onEvent: (ev: T) => void,
+  opts: StreamOptions = {}
+) {
+  // 1. Basic setup and error handling
+  // Ensure the response is successful (status 200-299).
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await safeText(res)}`);
+  }
+  // Get a reader to process the response body stream.
+  const reader = res.body?.getReader();
+  if (!reader) return;
+
+  // Use TextDecoder to convert Uint8Array chunks into UTF-8 strings.
+  // `fatal: false` prevents it from throwing on invalid UTF-8 sequences.
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  
+  // `carry` stores any partial line from the end of a chunk to be prepended to the next.
+  let carry = ""; 
+
+  const { signal, debug = false } = opts;
+
+  // 2. Helper function for parsing and event emission
+  // This DRYs up the parsing logic used in the loop and at the end.
+  function parseAndEmit(line: string) {
+    // `trim()` handles trailing `\r` from `\r\n` and skips empty lines.
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      // Parse the line as JSON and call the user-provided callback.
+      onEvent(JSON.parse(trimmed) as T);
+    } catch (e) {
+      // Log any JSON parsing errors if in debug mode.
+      if (debug) console.warn("[streamJSON] drop bad JSON:", JSON.stringify(trimmed), e);
+    }
+  }
+
+  // 3. AbortSignal handling
+  // Allows the stream processing to be cancelled.
+  let onAbort: (() => void) | undefined;
+  if (signal) {
+    if (signal.aborted) {
+      try { await reader.cancel(); } catch {}
+      return;
+    }
+    onAbort = () => { try { reader.cancel(); } catch {} };
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  try {
+    // 4. Main processing loop
+    while (true) {
+      // Read the next chunk from the stream. `done` will be true when the stream ends.
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      // Decode the Uint8Array chunk to a string. `stream: true` is crucial
+      // as it allows the decoder to handle multi-byte characters split across chunks.
+      const chunk = decoder.decode(value, { stream: true });
+      
+      // Prepend any partial line from the previous chunk.
+      const data = carry + chunk;
+      
+      // Split the data into lines based on the newline character.
+      const lines = data.split('\n');
+
+      // The last element of the split might be an incomplete line. We "carry" it
+      // to the next iteration. If the chunk ends with a newline, `pop` returns
+      // an empty string, which is correct.
+      carry = lines.pop() || '';
+
+      // Process each complete line.
+      for (const line of lines) {
+        parseAndEmit(line);
+      }
+    }
+
+    // 5. Final flush
+    // When the stream is done, flush the decoder for any remaining bytes.
+    const tail = decoder.decode();
+    if (tail) carry += tail;
+    
+    // If there's any remaining data in `carry`, it represents the final line. Parse it.
+    if (carry) {
+      parseAndEmit(carry);
+    }
+
+  } finally {
+    // 6. Cleanup
+    // Ensure the AbortSignal listener is removed and the reader is cancelled.
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    try { await reader.cancel(); } catch {}
+  }
+}
+
+/**
+ * Safely reads the response body as text, returning a fallback on error.
+ */
+async function safeText(res: Response) {
+  try { return await res.text(); } catch { return "<unreadable body>"; }
+}
+
+====================================================================
+File: src/hooks/useDebate.ts
+====================================================================
+
 import { useEffect, useRef, useState } from "react";
 import {
   versusStartStream,
@@ -64,17 +193,14 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   // Pre-roll dwell timer per turn
   const turnStartAtRef = useRef<Map<number, number>>(new Map());
 
-  // Buffer for deltas that arrive during the initial dwell time
-  const initialDeltaBufferRef = useRef<Map<number, string>>(new Map());
-
-  // Avoid stale closures in raf: mirror streamingTurnId into a ref
+  // Avoid stale closures: mirror streamingTurnId into a ref
   const streamingTurnIdRef = useRef<number | null>(null);
   useEffect(() => {
     streamingTurnIdRef.current = streamingTurnId;
   }, [streamingTurnId]);
 
   // Tuning knobs
-  const MIN_TYPING_DWELL_MS = 250; // 0 => no dwell; try 80–150ms. Increased for visibility.
+  const MIN_TYPING_DWELL_MS = 120; // 0 => no dwell; try 80–150ms
   const HIDE_INDICATOR_ON_FIRST_PAINT = true;
 
   // ---------------- persist session ----------------
@@ -104,8 +230,6 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
   function pushUser(text: string) {
     setMessages((prev) => [...prev, { role: "user", speaker: SPEAKER_USER, text }]);
   }
-
-  
 
   function maybeAttachAnnotatedAudio(rawSpeaker: string, filename?: string | null) {
     if (!filename) return;
@@ -140,36 +264,6 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     return addrs && addrs.length ? addrs : undefined;
   }
 
-  // direct state update, no batching
-  function appendDelta(turnId: number, delta: string) {
-    const now = performance.now();
-    const turnStartedAt = turnStartAtRef.current.get(turnId) || now;
-    const elapsed = now - turnStartedAt;
-
-    // If this is the first delta for a turn, respect the dwell time
-    if (!firstDeltaSeenRef.current.has(turnId)) {
-      // Buffer this delta
-      const currentBuffer = initialDeltaBufferRef.current.get(turnId) || "";
-      initialDeltaBufferRef.current.set(turnId, currentBuffer + delta);
-
-      // If this is the very first delta, set the timer
-      if (!currentBuffer) {
-        const delay = Math.max(0, MIN_TYPING_DWELL_MS - elapsed);
-        setTimeout(() => {
-          // Mark that we've seen the first delta *after* the timer fires
-          firstDeltaSeenRef.current.add(turnId);
-          if (HIDE_INDICATOR_ON_FIRST_PAINT) setTypingSpeaker(null);
-          const bufferedText = initialDeltaBufferRef.current.get(turnId) || "";
-          setMessages((prev) => appendDeltaByTurnId(prev, turnId, bufferedText));
-          initialDeltaBufferRef.current.delete(turnId); // Clean up buffer
-        }, delay);
-      }
-      return;
-    }
-
-    setMessages((prev) => appendDeltaByTurnId(prev, turnId, delta));
-  }
-
   // ---------------- event handler ----------------
   function onEvent(evt: JsonlEvent) {
     switch (evt.type) {
@@ -188,11 +282,11 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
         setStreamingTurnId(evt.turn_id);
         streamingTurnIdRef.current = evt.turn_id;
 
-        // start dwell timer for this turn
+        // Start dwell timer for this turn
         turnStartAtRef.current.set(evt.turn_id, performance.now());
         firstDeltaSeenRef.current.delete(evt.turn_id);
 
-        // add empty assistant bubble
+        // Add empty assistant bubble to the UI
         setMessages((prev) => [
           ...prev,
           {
@@ -212,10 +306,36 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
       }
 
       case "delta": {
-        appendDelta(evt.turn_id, evt.delta);
+        const activeId = streamingTurnIdRef.current;
+        const isFirstDelta = activeId === evt.turn_id && !firstDeltaSeenRef.current.has(activeId);
 
-        // optional inline audio annotation: [AUDIO::<speaker>::<filename>::]
-        const m = evt.delta.match(/ \[AUDIO::([^:]+)::([^:]+)::/);
+        const applyDelta = () => {
+          setMessages((prev) => appendDeltaByTurnId(prev, evt.turn_id, evt.delta));
+          // If this was the first delta, mark it as seen and hide the typing indicator.
+          if (isFirstDelta) {
+            firstDeltaSeenRef.current.add(evt.turn_id);
+            if (HIDE_INDICATOR_ON_FIRST_PAINT) {
+              setTypingSpeaker(null);
+            }
+          }
+        };
+
+        // If it's the first delta, respect the dwell time to show the "thinking" animation.
+        if (isFirstDelta) {
+          const startedAt = turnStartAtRef.current.get(evt.turn_id) || 0;
+          const elapsed = performance.now() - startedAt;
+          if (elapsed < MIN_TYPING_DWELL_MS) {
+            const remain = MIN_TYPING_DWELL_MS - elapsed;
+            setTimeout(applyDelta, remain);
+          } else {
+            applyDelta(); // Dwell time already passed
+          }
+        } else {
+          applyDelta(); // Subsequent deltas are applied immediately
+        }
+
+        // Optional inline audio annotation: [AUDIO::\<speaker>::\<filename>::]
+        const m = evt.delta.match(/\\[AUDIO::([^:]+)::([^:]+)::\]/i);
         if (m) {
           const [, rawSpeaker, filename] = m;
           maybeAttachAnnotatedAudio(rawSpeaker, filename);
@@ -225,6 +345,7 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
 
       case "endturn": {
         setLoading(false);
+
         if (streamingTurnIdRef.current === evt.turn_id) {
           setTypingSpeaker(null);
           setStreamingTurnId(null);
@@ -250,7 +371,6 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
         }
         setStreamingTurnId(null);
         streamingTurnIdRef.current = null;
-        // we do not clear buffers here—let the UI keep whatever text arrived
         break;
       }
     }
@@ -404,7 +524,6 @@ export default function useDebate({ mode, userId }: UseDebateArgs) {
     audioCacheRef.current.clear();
     firstDeltaSeenRef.current.clear();
     turnStartAtRef.current.clear();
-    initialDeltaBufferRef.current.clear();
   }
 
   function hardReset() {

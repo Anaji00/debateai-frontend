@@ -1,76 +1,54 @@
-# Devils Advocate AI - Frontend
+# DebateAI Frontend
 
-This is the frontend for the Devils Advocate AI application, a web-based tool that simulates debates between two AI-powered characters on any given topic. It features multiple debate modes, real-time message generation, and text-to-speech audio for an engaging user experience.
+This project is the frontend for the DebateAI application, built with React and TypeScript.
 
-## ✨ Features
+## Key Features
 
-- **Multiple Debate Modes**:
-  - **Versus**: Two distinct AI characters debate each other.
-  - **Devil's Advocate**: One AI takes a contrary position to the user's input.
-  - **Solo**: A single AI character explores a topic.
-- **Customizable Debates**: Users can define the two debating characters and the topic of discussion.
-- **Real-time Interaction**: Watch the debate unfold message by message.
-- **Text-to-Speech**: Generate and play audio for each message in the debate.
-- **Session History**: The sidebar automatically loads and displays a history of past debates for the logged-in user.
-- **User Authentication**: A simple username-based login system to persist session history.
+- Real-time, multi-character debate streaming.
+- Support for different debate modes (Versus, Solo, etc.).
+- Session management (saving and loading debates).
+- Text-to-speech audio generation for debate turns.
 
-## 🛠️ Tech Stack
+---
 
-- **React**: A JavaScript library for building user interfaces.
-- **TypeScript**: For static typing, improving code quality and maintainability.
-- **Tailwind CSS**: A utility-first CSS framework for rapid UI development.
-- **Vite**: The frontend tooling for a fast development experience.
+## Technical Deep Dive: Fixing the Streaming Text Animation
 
-##  Prerequisites
+A key feature of the UI is the "typing animation" where a new message from a character has a slight delay before the first letters appear. This gives the user a moment to see who is "about to speak." We recently fixed a critical bug in this animation logic.
 
-Before you begin, ensure you have the following installed:
-- [Node.js](https://nodejs.org/en/) (v18 or later recommended)
-- [npm](https://www.npmjs.com/) (comes with Node.js) or [yarn](https://yarnpkg.com/)
+### The Problem: Scrambled Text
 
-This frontend requires the backend server to be running to function correctly. Please ensure the backend is running on `http://localhost:8000`.
+When a new message stream began, the first few characters would often appear scrambled. For example, "Your" would render as "ourY". This happened because multiple text "delta" events were arriving from the server faster than our animation delay.
 
-## 🚀 Getting Started
+### The Root Cause: A Race Condition
 
-Follow these steps to get the frontend development server running on your local machine.
+The issue was a classic race condition in our `useDebate.ts` hook:
 
-### 1. Clone the Repository
+1.  **Event 1 (`Y`) arrives:** The code would see this was the first character of a new message and schedule it to be rendered after a `250ms` delay using `setTimeout`. It would also *immediately* flag that we had "seen" the first character.
+2.  **Event 2 (`o`) arrives:** This event would arrive *before* the `250ms` timer for `Y` was finished.
+3.  **Incorrect Rendering:** The code would check the "seen" flag, see it was `true`, and immediately render `o`.
+4.  **Timer Finishes:** The `250ms` timer for `Y` would finally fire and append `Y` to the already-rendered `o`, resulting in the scrambled text `oY`.
 
-If you haven't already, clone the project to your local machine.
+### The Solution: Buffering and Delayed Flagging
 
-### 2. Navigate to the Frontend Directory
+We implemented a two-part solution in `useDebate.ts` to make the animation robust.
 
-```sh
-cd path/to/DebateAi/frontend
+#### 1. Buffering Initial Deltas
+
+We introduced a `initialDeltaBufferRef` (a `useRef` holding a `Map`). When delta events arrive during the initial animation delay, we don't try to render them. Instead, we collect them in this buffer.
+
+```typescript
+// In useDebate.ts
+const initialDeltaBufferRef = useRef<Map<number, string>>(new Map());
 ```
 
-### 3. Install Dependencies
+#### 2. Correctly Timed Logic
 
-Install all the required npm packages.
+The `setTimeout` is now only set for the very first delta of a turn. When its timer completes:
 
-```sh
-npm install
-```
+1.  It appends the **entire buffered string** at once, ensuring all characters collected during the delay are in the correct order.
+2.  **Only then** does it set the `firstDeltaSeenRef` flag. This is the critical change.
+3.  It clears the buffer for that turn.
 
-### 4. Run the Development Server
+By waiting to set the `firstDeltaSeenRef` flag until *after* the initial buffer is flushed, we guarantee that any subsequent deltas that arrive are correctly treated as "immediate appends" without interfering with the initial animated chunk.
 
-Start the Vite development server.
-
-```sh
-npm run dev
-```
-
-The application should now be running and accessible at `http://localhost:5173` (or another port if 5173 is in use).
-
-## 📂 Project Structure
-
-The main source code is located in the `src/` directory, organized as follows:
-
-```
-src/
-├── components/   # Reusable UI components (Sidebar, ChatWindow, etc.)
-├── context/      # React Context for global state (e.g., AuthContext)
-├── hooks/        # Custom React hooks (e.g., useDebate)
-├── pages/        # Top-level page components (LandingPage, DebatePage)
-├── App.tsx       # Main application component with routing
-└── main.tsx      # Entry point of the application
-```
+This approach makes the animation reliable, prevents race conditions, and maintains a smooth user experience, even with very fast-streaming backends.

@@ -122,7 +122,7 @@ export default function Sidebar(props: SidebarProps){
       for (const f of Array.from(files)) {
         await uploadDoc(Number(sessionId), f, "shared", f.name);
       }
-      const {docs: arr = []} = await listDocs(Number(sessionId), "shared");
+      const {docs: arr = []} = await listDocs(Number(sessionId));
       setDocs(arr);
     } catch (e) {
       console.error("[Sidebar] uploadDoc failed:", e);

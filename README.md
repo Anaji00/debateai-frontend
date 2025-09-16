@@ -1,35 +1,53 @@
 # DebateAI Frontend
 
-This project is the frontend for the DebateAI application, built with React and TypeScript.
+This project is the frontend for the DebateAI application, built with React and TypeScript. It provides a user interface for real-time, multi-character debate streaming, session management, and more.
 
 ## Key Features
 
-- Real-time, multi-character debate streaming.
-- Support for different debate modes (Versus, Solo, etc.).
-- Session management (saving and loading debates).
-- Text-to-speech audio generation for debate turns.
+*   **Real-time Debate Streaming:** Watch characters debate topics in real-time with a typing animation.
+*   **Multiple Debate Modes:**
+    *   **Versus:** Two AI characters debate each other on a given topic.
+    *   **Solo:** A single AI character explores a topic.
+    *   **Devil's Advocate:** An AI character takes a contrary position to a user's thesis.
+*   **Session Management:**
+    *   Save and load debate sessions.
+    *   Create, rename, and delete sessions.
+*   **Retrieval-Augmented Generation (RAG):**
+    *   Upload reference documents (PDF, TXT, MD) to provide context for the debate.
+    *   The AI characters will use the information from these documents in their arguments.
+*   **Text-to-Speech:** Listen to the debate with generated audio for each character's turn.
+*   **User Authentication:** Secure login and registration system.
 
-## Sidebar Component
+## Getting Started
 
-The `Sidebar.tsx` component renders the sidebar UI for the application. It is responsible for managing debate sessions and handling Retrieval-Augmented Generation (RAG) documents.
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    ```
+2.  **Install dependencies:**
+    ```bash
+    npm install
+    ```
+3.  **Run the development server:**
+    ```bash
+    npm run dev
+    ```
+    The application will be available at `http://localhost:5173` (or another port if 5173 is in use).
 
-### Debate Sessions
+## Project Structure
 
-The sidebar allows users to:
-- **List existing debate sessions:** Previously saved debates are listed, showing their title and last updated time.
-- **Create new sessions:** A "New" button allows users to start a fresh debate.
-- **Rename sessions:** An inline editing feature lets users rename existing sessions.
-- **Delete sessions:** Users can remove sessions they no longer need.
-- **Switch between sessions:** Clicking on a session in the list makes it the active one.
+The project is organized into the following main directories:
 
-### Documents (RAG) Panel
-
-This panel, located at the top of the sidebar, manages documents for the currently active debate session. This functionality is crucial for providing context to the AI debaters.
-
-- **Upload Documents:** Users can upload files (PDF, TXT, MD) to be associated with a session.
-- **List Documents:** Uploaded documents are listed within the panel.
-- **Delete Documents:** A "Clear" button removes all documents for the current session.
-- **Pause/Resume:** A control allows pausing and resuming the RAG functionality.
+*   `src/api`: Contains functions for communicating with the backend API, including debate streaming and document management.
+*   `src/assets`: Static assets like images and SVGs.
+*   `src/auth`: Handles user authentication, including the auth provider and API calls for login/register.
+*   `src/components`: Reusable React components that make up the UI, such as the `Sidebar`, `CharacterSelector`, and `MessageList`.
+*   `src/data`: Static data used in the application, like character information.
+*   `src/hooks`: Custom React hooks for managing complex state and logic, such as `useDebate` and `useSessions`.
+*   `src/lib`: Utility functions for various tasks like audio playback, chat message processing, and data persistence.
+*   `src/pages`: Top-level page components that correspond to different routes in the application (e.g., `DebatePage`, `LoginPage`).
+*   `src/Routes`: Defines the application's routing structure.
+*   `src/types`: TypeScript type definitions used throughout the project.
 
 ---
 

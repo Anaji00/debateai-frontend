@@ -71,11 +71,8 @@ export default function CharacterSetup(props: {
       // Logic for 'Versus' mode (picking two *different* characters).
       if (pool.length < 2) return; // Can't pick two if there aren't enough.
       // This is an efficient way to pick two distinct indices from an array (a variation of the Fisher-Yates shuffle).
-      let i1 = Math.floor(Math.random() * pool.length);
-      let i2 = Math.floor(Math.random() * (pool.length - 1));
-      if (i2 >= i1) i2 += 1;
-      setCharacter_1(pool[i1] ?? "");
-      setCharacter_2(pool[i2] ?? "");
+      // This is an efficient way to pick two distinct indices from an array (a variation of the Fisher-Yates shuffle).
+      const i1 = Math.floor(Math.random() * pool.length);
     }
   };
 

@@ -15,8 +15,8 @@ function ScrollToTop() {
 
 /** If deploying under a subpath, set VITE_BASENAME in .env */
 const BASENAME =
-  (import.meta as any).env?.VITE_BASENAME
-    ? String((import.meta as any).env.VITE_BASENAME).replace(/\/+$/, "")
+  import.meta.env?.VITE_BASENAME
+    ? String(import.meta.env.VITE_BASENAME).replace(/\/+$/, "")
     : undefined;
 
 export default function App() {

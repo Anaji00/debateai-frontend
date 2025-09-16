@@ -101,7 +101,7 @@ export default function CharacterSelector({
 
     // For 'Versus' mode, we need to pick two *different* random characters.
     if (pool.length < 2) return; // Can't pick two if there aren't at least two.
-    let idx1 = Math.floor(Math.random() * pool.length);
+    const idx1 = Math.floor(Math.random() * pool.length);
     let idx2;
     do {
       idx2 = Math.floor(Math.random() * pool.length);

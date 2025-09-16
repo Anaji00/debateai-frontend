@@ -9,6 +9,28 @@ This project is the frontend for the DebateAI application, built with React and 
 - Session management (saving and loading debates).
 - Text-to-speech audio generation for debate turns.
 
+## Sidebar Component
+
+The `Sidebar.tsx` component renders the sidebar UI for the application. It is responsible for managing debate sessions and handling Retrieval-Augmented Generation (RAG) documents.
+
+### Debate Sessions
+
+The sidebar allows users to:
+- **List existing debate sessions:** Previously saved debates are listed, showing their title and last updated time.
+- **Create new sessions:** A "New" button allows users to start a fresh debate.
+- **Rename sessions:** An inline editing feature lets users rename existing sessions.
+- **Delete sessions:** Users can remove sessions they no longer need.
+- **Switch between sessions:** Clicking on a session in the list makes it the active one.
+
+### Documents (RAG) Panel
+
+This panel, located at the top of the sidebar, manages documents for the currently active debate session. This functionality is crucial for providing context to the AI debaters.
+
+- **Upload Documents:** Users can upload files (PDF, TXT, MD) to be associated with a session.
+- **List Documents:** Uploaded documents are listed within the panel.
+- **Delete Documents:** A "Clear" button removes all documents for the current session.
+- **Pause/Resume:** A control allows pausing and resuming the RAG functionality.
+
 ---
 
 ## Technical Deep Dive: Fixing the Streaming Text Animation
